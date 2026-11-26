@@ -22,8 +22,14 @@
 #                        instead of ~/.local/bin
 #   --no-modify-path     skip auto-appending an `export PATH=...` line
 #   --channel <name>     persist and install the latest stable or nightly release
+#   --mcp <clients>      after install, register the MCP server with each named
+#                        client (comma-separated: claude, codex, qwen, droid,
+#                        openclaw), or `auto` for every one whose CLI is on
+#                        PATH. Re-running replaces the entry; a failed
+#                        registration warns and prints the manual command.
 #
 # Env overrides:
+#   CHAUFFEUR_RS_MCP=auto               same as --mcp
 #   CHAUFFEUR_RS_VERSION=0.1.2          pin a stable release
 #   CHAUFFEUR_RS_VERSION=nightly-chauffeur-rs-v0.1.3-nightly.20260812.42
 #                                        pin an exact nightly release
@@ -138,6 +144,7 @@ KEEP_VERSIONS_DEFAULT=5
 KEEP_VERSIONS="${CHAUFFEUR_RS_KEEP_VERSIONS:-$KEEP_VERSIONS_DEFAULT}"
 CHANNEL_ARG=""
 CHANNEL_EXPLICIT=0
+MCP_ARG="${CHAUFFEUR_RS_MCP:-}"
 
 # macOS-only: name and install location of the .app bundle that wraps
 # the bare binary so the TCC auto-relaunch path in `chauffeur mcp` has
@@ -159,9 +166,51 @@ while [[ $# -gt 0 ]]; do
             [[ -n "${2:-}" ]] || { printf 'error: --channel requires stable or nightly\n' >&2; exit 2; }
             CHANNEL_ARG="$2"; CHANNEL_EXPLICIT=1; shift 2 ;;
         --channel=*) CHANNEL_ARG="${1#*=}"; CHANNEL_EXPLICIT=1; shift ;;
+        --mcp)
+            [[ -n "${2:-}" ]] || { printf 'error: --mcp requires a client name or auto\n' >&2; exit 2; }
+            MCP_ARG="$2"; shift 2 ;;
+        --mcp=*) MCP_ARG="${1#*=}"; shift ;;
         *) shift ;;
     esac
 done
+
+# Clients registered by their own CLI. Everything else mcp-config knows
+# about has no add command, so --mcp prints its config to paste instead.
+MCP_CLI_CLIENTS="claude codex qwen droid openclaw"
+MCP_PASTE_CLIENTS="cursor opencode hermes antigravity zcode prime-agent pi"
+
+# Validate before downloading anything so a typo costs nothing.
+MCP_CLIENTS=""
+if [[ -n "$MCP_ARG" ]]; then
+    for mcp_client in ${MCP_ARG//,/ }; do
+        case "$mcp_client" in
+            auto) MCP_CLIENTS="$MCP_CLIENTS auto" ;;
+            claude-code) MCP_CLIENTS="$MCP_CLIENTS claude" ;;
+            qwen-code) MCP_CLIENTS="$MCP_CLIENTS qwen" ;;
+            factory) MCP_CLIENTS="$MCP_CLIENTS droid" ;;
+            gemini) MCP_CLIENTS="$MCP_CLIENTS antigravity" ;;
+            *)
+                if [[ " $MCP_CLI_CLIENTS $MCP_PASTE_CLIENTS " == *" $mcp_client "* ]]; then
+                    MCP_CLIENTS="$MCP_CLIENTS $mcp_client"
+                else
+                    printf 'error: unknown --mcp client %q; supported: auto %s %s\n' \
+                        "$mcp_client" "$MCP_CLI_CLIENTS" "$MCP_PASTE_CLIENTS" >&2
+                    exit 2
+                fi
+                ;;
+        esac
+    done
+    if [[ " $MCP_CLIENTS " == *" auto "* ]]; then
+        MCP_CLIENTS=" ${MCP_CLIENTS//auto/} "
+        for mcp_client in $MCP_CLI_CLIENTS; do
+            if [[ "$MCP_CLIENTS" != *" $mcp_client "* ]] && command -v "$mcp_client" >/dev/null 2>&1; then
+                MCP_CLIENTS="$MCP_CLIENTS$mcp_client "
+            fi
+        done
+        [[ -n "${MCP_CLIENTS// /}" ]] \
+            || printf 'note: --mcp auto found none of: %s; no MCP client will be registered\n' "$MCP_CLI_CLIENTS" >&2
+    fi
+fi
 
 # Validate KEEP_VERSIONS up front so a typo (e.g. "five") falls back to
 # the default instead of silently disabling GC. Accepts any non-negative
@@ -615,7 +664,7 @@ done
 # asset — see the recovery at the download step below.
 #
 # ~~~ BAKED_VERSION: auto-updated after release publication — do not edit ~~~
-CHAUFFEUR_RS_BAKED_VERSION="0.26.4" # published-installer-version
+CHAUFFEUR_RS_BAKED_VERSION="0.26.5" # published-installer-version
 # ~~~ END_BAKED_VERSION ~~~
 
 # Run API requests with an optional token. Keep the header construction here
@@ -1385,6 +1434,60 @@ if [[ "${REPLACED_SWIFT:-0}" == "1" ]]; then
             echo "TCC rows were left unchanged to avoid destroying valid grants."
             ;;
     esac
+    echo ""
+fi
+
+# --- Register the MCP server with the requested clients (--mcp) ----------
+#
+# The registration matches what `chauffeur mcp-config --client <name>`
+# prints, with the stable $BIN_LINK as the command: on Linux the binary's
+# own path is a versioned release dir that post-install GC later deletes.
+# Each step replaces an existing entry, so re-running the installer never
+# duplicates one. A failure only warns: the binary is already installed.
+mcp_run() {
+    printf '    $'
+    printf ' %q' "$@"
+    printf '\n'
+    "$@" </dev/null
+}
+
+mcp_register() {
+    local client="$1"
+    local json
+    json="{\"command\":\"$(printf '%s' "$BIN_LINK" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')\",\"args\":[\"mcp\"]}"
+    case "$client" in
+        claude)
+            # add-json refuses an existing name, so drop the old entry first.
+            claude mcp remove --scope user chauffeur-computer-use </dev/null >/dev/null 2>&1 || true
+            mcp_run claude mcp add-json --scope user chauffeur-computer-use "$json" ;;
+        codex)
+            mcp_run codex mcp add chauffeur -- "$BIN_LINK" mcp ;;
+        qwen)
+            mcp_run qwen mcp add --scope user chauffeur "$BIN_LINK" mcp ;;
+        droid)
+            droid mcp remove chauffeur </dev/null >/dev/null 2>&1 || true
+            mcp_run droid mcp add chauffeur "$BIN_LINK mcp" ;;
+        openclaw)
+            mcp_run openclaw mcp set chauffeur "$json" ;;
+    esac
+}
+
+if [[ -n "${MCP_CLIENTS// /}" ]]; then
+    log "registering the chauffeur MCP server"
+    for mcp_client in $MCP_CLIENTS; do
+        if [[ " $MCP_PASTE_CLIENTS " == *" $mcp_client "* ]]; then
+            echo "  $mcp_client has no command to register MCP servers; add this yourself:"
+            "$BIN_LINK" mcp-config --client "$mcp_client" | sed 's/^/    /' || true
+        elif ! command -v "$mcp_client" >/dev/null 2>&1; then
+            echo "  warning: $mcp_client is not on PATH; skipped. Once it is installed, run:"
+            echo "    $BIN_LINK mcp-config --client $mcp_client"
+        elif mcp_register "$mcp_client"; then
+            echo "  registered with $mcp_client; start a new $mcp_client session to load it"
+        else
+            echo "  warning: registering with $mcp_client failed; the install itself succeeded. Run:"
+            echo "    $BIN_LINK mcp-config --client $mcp_client"
+        fi
+    done
     echo ""
 fi
 

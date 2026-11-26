@@ -26,7 +26,9 @@ Next steps:
      Then run /reload in Prime Agent (or start a new session).
 
   4. As an MCP server — run the one matching your client. Each is also
-     available via '{{BINARY}} mcp-config --client <name>':
+     available via '{{BINARY}} mcp-config --client <name>'. Or let the
+     installer register it: re-run it with `--mcp auto` (every supported
+     client CLI on PATH) or `--mcp claude,codex`.
 
      • Claude Code (computer-use compatibility mode):
          {{BINARY}} mcp-config --client claude

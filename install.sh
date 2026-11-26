@@ -4,6 +4,7 @@
 #
 # Usage (from README + release body):
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/axetechnologies/chauffeur-dist/main/install.sh)"
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/axetechnologies/chauffeur-dist/main/install.sh)" -- --mcp auto
 #
 # Flags:
 #   --bin-dir <path>     install the chauffeur wrapper to <path> instead of
@@ -11,6 +12,9 @@
 #   --no-modify-path     skip auto-appending an `export PATH=...` line to your
 #                        shell rc when ~/.local/bin is missing from PATH
 #   --channel <name>     persist and install the latest stable or nightly release
+#   --mcp <clients>      also register the MCP server: `auto` for every
+#                        supported client CLI on PATH, or a comma-separated
+#                        list (claude, codex, qwen, droid, openclaw)
 #   --backend=rust       explicit Rust backend (no-op; Rust is the only option)
 #   --experimental-rust  legacy alias for --backend=rust (no-op)
 #   --backend=swift      retired Swift backend (no-op; accepted for compat)
@@ -22,6 +26,7 @@
 #   CHAUFFEUR_BIN_DIR=PATH        legacy alias for --bin-dir
 #   CHAUFFEUR_NO_MODIFY_PATH=1    same as --no-modify-path
 #   CHAUFFEUR_RS_HOME=PATH        package and release-channel state home
+#   CHAUFFEUR_MCP=auto            same as --mcp
 #
 # Uninstall:
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/axetechnologies/chauffeur-dist/main/uninstall.sh)"
@@ -88,6 +93,9 @@ if [[ -n "${CHAUFFEUR_VERSION:-}" && -z "${CHAUFFEUR_RS_VERSION:-}" ]]; then
 fi
 if [[ -n "${CHAUFFEUR_NO_MODIFY_PATH:-}" && -z "${CHAUFFEUR_RS_NO_MODIFY_PATH:-}" ]]; then
     export CHAUFFEUR_RS_NO_MODIFY_PATH="$CHAUFFEUR_NO_MODIFY_PATH"
+fi
+if [[ -n "${CHAUFFEUR_MCP:-}" && -z "${CHAUFFEUR_RS_MCP:-}" ]]; then
+    export CHAUFFEUR_RS_MCP="$CHAUFFEUR_MCP"
 fi
 
 # Prefer the on-disk copy when this script is running from a checked-out
